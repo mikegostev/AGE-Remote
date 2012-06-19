@@ -89,4 +89,8 @@ public class API
   return null;
  }
 
+ public boolean setMMode( boolean set, long timeout )
+ {
+  return true;
+ }
 }
