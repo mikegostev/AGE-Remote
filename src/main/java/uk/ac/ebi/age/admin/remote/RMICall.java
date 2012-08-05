@@ -1,5 +1,6 @@
 package uk.ac.ebi.age.admin.remote;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -19,7 +20,15 @@ public class RMICall
   directConverterMap.put(int.class, new IntStr2ValConverter());
  }
  
- public static String call(Object instance, String... input) throws AmbiguousMethodCallException, MethodNotExistException, ArgumentConversionException,
+ public static String call(Object instance, String... input) throws AmbiguousMethodCallException,
+ MethodNotExistException, ArgumentConversionException,
+ InvocationTargetException, MethodInvocationException
+ {
+  return call(instance, null, null, input);
+ }
+
+ public static String call(Object instance, Map<Class<?>, String2ValueConverter> cConv, Map<Class<?>, OutputFormatter> cFmt, String... input) throws AmbiguousMethodCallException,
+   MethodNotExistException, ArgumentConversionException,
    InvocationTargetException, MethodInvocationException
  {
   
@@ -55,18 +64,30 @@ public class RMICall
     params[i] = input[i+1];
    else
    {
-    String2ValueConverter conv = directConverterMap.get(cls);
+    String2ValueConverter conv = null;
+    
+    if( cConv != null )
+     conv = cConv.get(cls);
+    
+    if( conv == null )
+     conv = directConverterMap.get(cls);
+
+    if( conv == null &&  cls.isPrimitive() )
+     conv = PrimitiveTypeConverter.getInstance();
+    
+    if( conv == null &&  cls.isArray() )
+     conv = ArrayConverter.getInstance();    
     
     if( conv != null )
     {
      try
      {
-      params[i] = conv.convert(input[i+1]);
+      params[i] = conv.convert(input[i+1], cls);
       continue;
      }
      catch(ConvertionException e)
      {
-      throw new ArgumentConversionException("Argument #"+i+" conversion error. Target class: "+cls.getName(), i);
+      throw new ArgumentConversionException("Argument #"+i+" conversion error. Target class: "+cls.getName()+". "+e.getMessage(), i);
      }
     }
     
@@ -138,12 +159,87 @@ public class RMICall
   if( val == null )
    return null;
  
-  OutputFormatter fmt = formatters.get( method.getReturnType() );
- 
+  Class<?> retClass = method.getReturnType();
+  
+  OutputFormatter fmt = null;
+  
+  if( cFmt != null )
+   fmt = cFmt.get( retClass );
+  
+  if( fmt == null )
+   fmt = formatters.get(retClass);
+   
   if( fmt != null )
    return fmt.format(val);
+
+  
+  if(retClass.isPrimitive())
+  {
+   try
+   {
+    Method valueOfMeth = String.class.getMethod("valueOf", retClass);
+    return (String) valueOfMeth.invoke(null, val);
+   }
+   catch(NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException e)
+   {
+    throw new MethodInvocationException("Can't invoke String.valueOf method for arg: " + retClass.getName(), e);
+   }
+
+  }
+  
+  if( retClass.isArray() )
+  {
+   Class<?> arrClass = retClass.getComponentType();
+   
+   if( cFmt != null )
+    fmt = cFmt.get( arrClass );
+   
+   if( fmt == null )
+    fmt = formatters.get(arrClass);
+    
+   StringBuilder sb = new StringBuilder();
+   int len = Array.getLength(val);
+
+   if( fmt != null )
+   {
+    
+    for(int j = 0; j < len; j++)
+     sb.append( fmt.format(Array.get(val, j))).append('\n');
+    
+    return sb.toString();
+   }
+   else if( arrClass.isPrimitive() )
+   {
+    Method valueOfMeth = null;
+    
+    try
+    {
+     valueOfMeth = String.class.getMethod("valueOf", retClass);
+    }
+    catch(NoSuchMethodException | SecurityException | IllegalArgumentException e)
+    {
+     throw new MethodInvocationException("Can't find String.valueOf method for arg: " + retClass.getName(), e);
+    }
+
+    try
+    {
+     for(int j = 0; j < len; j++)
+      sb.append(valueOfMeth.invoke(null, Array.get(val, j))).append('\n');
+    }
+    catch(ArrayIndexOutOfBoundsException | IllegalAccessException | IllegalArgumentException e)
+    {
+     throw new MethodInvocationException("Can't invoke String.valueOf method for arg: " + retClass.getName(), e);
+    }
+    
+    return sb.toString();
+   }
+   else
+    for(int j = 0; j < len; j++)
+     sb.append(Array.get(val, j).toString()).append('\n');
+  }
   
   return val.toString();
  }
+ 
  
 }
